@@ -100,38 +100,16 @@ InterfaceConfiguration DiffDriveController::state_interface_configuration() cons
 controller_interface::return_type DiffDriveController::update_reference_from_subscribers(
   const rclcpp::Time & time, const rclcpp::Duration & /*period*/)
 {
-  auto logger = get_node()->get_logger();
+  auto current_ref = *(received_velocity_msg_ptr_.readFromRT());
 
-  const std::shared_ptr<TwistStamped> command_msg_ptr = *(received_velocity_msg_ptr_.readFromRT());
-
-  if (command_msg_ptr == nullptr)
+  if (!std::isnan(current_ref->twist.linear.x) && !std::isnan(current_ref->twist.angular.z))
   {
-    RCLCPP_WARN(logger, "Velocity message received was a nullptr.");
-    return controller_interface::return_type::ERROR;
+    // The linear velocity is decomposed into x/y components since we depend on that in the control
+    // loop
+    reference_interfaces_[0] = std::cos(odometry_.getHeading()) * current_ref->twist.linear.x;
+    reference_interfaces_[1] = std::sin(odometry_.getHeading()) * current_ref->twist.linear.x;
+    reference_interfaces_[2] = current_ref->twist.angular.z;
   }
-
-  const auto age_of_last_command = time - command_msg_ptr->header.stamp;
-  // Brake if cmd_vel has timeout, override the stored command
-  if (age_of_last_command > cmd_vel_timeout_)
-  {
-    reference_interfaces_[0] = 0.0;
-    reference_interfaces_[1] = 0.0;
-  }
-  else if (
-    std::isfinite(command_msg_ptr->twist.linear.x) &&
-    std::isfinite(command_msg_ptr->twist.angular.z))
-  {
-    reference_interfaces_[0] = command_msg_ptr->twist.linear.x;
-    reference_interfaces_[1] = command_msg_ptr->twist.angular.z;
-  }
-  else
-  {
-    RCLCPP_WARN_SKIPFIRST_THROTTLE(
-      logger, *get_node()->get_clock(), cmd_vel_timeout_.seconds() * 1000,
-      "Command message contains NaNs. Not updating reference interfaces.");
-  }
-
-  previous_update_timestamp_ = time;
 
   return controller_interface::return_type::OK;
 }
@@ -141,10 +119,14 @@ controller_interface::return_type DiffDriveController::update_and_write_commands
 {
   auto logger = get_node()->get_logger();
 
-  // command may be limited further by SpeedLimit,
-  // without affecting the stored twist command
-  double linear_command = reference_interfaces_[0];
-  double angular_command = reference_interfaces_[1];
+  // Compute and set the linear velocity and direction, copy the angular velocity command.
+  // The velocity angle can converge significantly from the current direction if theta is non-zero.
+  // The backward flag allows for M_PI_2 tolerance between these angles.
+  double vel_angle = std::atan2(reference_interfaces_[1], reference_interfaces_[0]);
+  bool backward = std::abs(std::abs(odometry_.getHeading() - vel_angle) - M_PI) < M_PI_2;
+  double linear_command =
+    std::hypot(reference_interfaces_[0], reference_interfaces_[1]) * (backward ? -1 : 1);
+  double angular_command = reference_interfaces_[2];
 
   if (!std::isfinite(linear_command) || !std::isfinite(angular_command))
   {
@@ -334,7 +316,7 @@ controller_interface::CallbackReturn DiffDriveController::on_configure(
   publish_limited_velocity_ = params_.publish_limited_velocity;
 
   // Allocate reference interfaces if needed
-  const int nr_ref_itfs = 2;
+  const int nr_ref_itfs = 3;
   reference_interfaces_.resize(nr_ref_itfs, std::numeric_limits<double>::quiet_NaN());
 
   // TODO(christophfroehlich) remove deprecated parameters
@@ -717,13 +699,18 @@ DiffDriveController::on_export_reference_interfaces()
 
   reference_interfaces.push_back(
     hardware_interface::CommandInterface(
-      get_node()->get_name() + std::string("/linear"), hardware_interface::HW_IF_VELOCITY,
+      get_node()->get_name() + std::string("x/"), hardware_interface::HW_IF_VELOCITY,
       &reference_interfaces_[0]));
 
   reference_interfaces.push_back(
     hardware_interface::CommandInterface(
-      get_node()->get_name() + std::string("/angular"), hardware_interface::HW_IF_VELOCITY,
+      get_node()->get_name() + std::string("y/"), hardware_interface::HW_IF_VELOCITY,
       &reference_interfaces_[1]));
+
+  reference_interfaces.push_back(
+    hardware_interface::CommandInterface(
+      get_node()->get_name() + std::string("theta/"), hardware_interface::HW_IF_VELOCITY,
+      &reference_interfaces_[2]));
 
   return reference_interfaces;
 }
