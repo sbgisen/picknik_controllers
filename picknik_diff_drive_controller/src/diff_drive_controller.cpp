@@ -699,17 +699,17 @@ DiffDriveController::on_export_reference_interfaces()
 
   reference_interfaces.push_back(
     hardware_interface::CommandInterface(
-      get_node()->get_name() + std::string("x/"), hardware_interface::HW_IF_VELOCITY,
+      get_node()->get_name() + std::string("/x"), hardware_interface::HW_IF_VELOCITY,
       &reference_interfaces_[0]));
 
   reference_interfaces.push_back(
     hardware_interface::CommandInterface(
-      get_node()->get_name() + std::string("y/"), hardware_interface::HW_IF_VELOCITY,
+      get_node()->get_name() + std::string("/y"), hardware_interface::HW_IF_VELOCITY,
       &reference_interfaces_[1]));
 
   reference_interfaces.push_back(
     hardware_interface::CommandInterface(
-      get_node()->get_name() + std::string("theta/"), hardware_interface::HW_IF_VELOCITY,
+      get_node()->get_name() + std::string("/theta"), hardware_interface::HW_IF_VELOCITY,
       &reference_interfaces_[2]));
 
   return reference_interfaces;
